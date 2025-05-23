@@ -24,7 +24,7 @@ pub mod buffer_tests;
 
 pub use crate::language_settings::EditPredictionsMode;
 use crate::language_settings::SoftWrap;
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
 use collections::{HashMap, HashSet, IndexSet};
 use fs::Fs;
@@ -345,7 +345,10 @@ pub trait LspAdapter: 'static + Send + Sync {
             // because we don't want to download and overwrite our global one
             // for each worktree we might have open.
             if binary_options.allow_path_lookup {
-                if let Some(binary) = self.check_if_user_installed(delegate.as_ref(), toolchains, cx).await {
+                if let Some(binary) = self
+                    .check_if_user_installed(delegate.as_ref(), toolchains, cx)
+                    .await
+                {
                     log::info!(
                         "found user-installed language server for {}. path: {:?}, arguments: {:?}",
                         self.name().0,
@@ -356,45 +359,10 @@ pub trait LspAdapter: 'static + Send + Sync {
                 }
             }
 
-            anyhow::ensure!(binary_options.allow_binary_download, "downloading language servers disabled");
-
-            if let Some(cached_binary) = cached_binary.as_ref() {
-                return Ok(cached_binary.clone());
-            }
-
-            let Some(container_dir) = delegate.language_server_download_dir(&self.name()).await else {
-                anyhow::bail!("no language server download dir defined")
-            };
-
-            let mut binary = try_fetch_server_binary(self.as_ref(), &delegate, container_dir.to_path_buf(), cx).await;
-
-            if let Err(error) = binary.as_ref() {
-                if let Some(prev_downloaded_binary) = self
-                    .cached_server_binary(container_dir.to_path_buf(), delegate.as_ref())
-                    .await
-                {
-                    log::info!(
-                        "failed to fetch newest version of language server {:?}. error: {:?}, falling back to using {:?}",
-                        self.name(),
-                        error,
-                        prev_downloaded_binary.path
-                    );
-                    binary = Ok(prev_downloaded_binary);
-                } else {
-                    delegate.update_status(
-                        self.name(),
-                        BinaryStatus::Failed {
-                            error: format!("{error:?}"),
-                        },
-                    );
-                }
-            }
-
-            if let Ok(binary) = &binary {
-                *cached_binary = Some(binary.clone());
-            }
-
-            binary
+            return Err(anyhow!(
+                "Fred does not auto-download language servers. Please provide your own trusted copy of '{}'",
+                self.name().0
+            ));
         }
         .boxed_local()
     }
