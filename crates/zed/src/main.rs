@@ -1,4 +1,4 @@
-mod reliability;
+// FRED: mod reliability;
 mod zed;
 
 use agent_ui::AgentPanel;
@@ -549,10 +549,10 @@ pub fn main() {
         });
         AppState::set_global(Arc::downgrade(&app_state), cx);
 
-        auto_update::init(client.clone(), cx);
+        // FRED: auto_update::init(client.clone(), cx);
         dap_adapters::init(cx);
         auto_update_ui::init(cx);
-        reliability::init(client.clone(), cx);
+        // FRED: reliability::init(client.clone(), cx);
         extension_host::init(
             extension_host_proxy.clone(),
             app_state.fs.clone(),
