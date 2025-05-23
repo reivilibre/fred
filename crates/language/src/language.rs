@@ -24,7 +24,7 @@ pub mod buffer_tests;
 
 use crate::language_settings::SoftWrap;
 pub use crate::language_settings::{EditPredictionsMode, IndentGuideSettings};
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
 use collections::{HashMap, HashSet, IndexSet};
 use futures::Future;
@@ -580,7 +580,6 @@ where
         mut cx: AsyncApp,
     ) -> LanguageServerBinaryLocations {
         async move {
-            let cached_binary_deref = cached_binary.deref_mut();
             // First we check whether the adapter can give us a user-installed binary.
             // If so, we do *not* want to cache that, because each worktree might give us a different
             // binary:
@@ -606,74 +605,10 @@ where
                 return (Ok(binary), None);
             }
 
-            if !binary_options.allow_binary_download {
-                return (
-                    Err(anyhow::anyhow!("downloading language servers disabled")),
-                    None,
-                );
-            }
-
-            if let Some((pre_release, cached_binary)) = cached_binary_deref
-                && *pre_release == binary_options.pre_release
-            {
-                return (Ok(cached_binary.clone()), None);
-            }
-
-            let Some(container_dir) = delegate.language_server_download_dir(&self.name()).await
-            else {
-                return (
-                    Err(anyhow::anyhow!("no language server download dir defined")),
-                    None,
-                );
-            };
-
-            let last_downloaded_binary = self
-                .cached_server_binary(container_dir.to_path_buf(), delegate.as_ref())
-                .await
-                .context(
-                    "did not find existing language server binary, falling back to downloading",
-                );
-            let download_binary = async move {
-                let mut binary = self
-                    .try_fetch_server_binary(
-                        &delegate,
-                        container_dir.to_path_buf(),
-                        binary_options.pre_release,
-                        &mut cx,
-                    )
-                    .await;
-
-                if let Err(error) = binary.as_ref() {
-                    if let Some(prev_downloaded_binary) = self
-                        .cached_server_binary(container_dir.to_path_buf(), delegate.as_ref())
-                        .await
-                    {
-                        log::info!(
-                            "failed to fetch newest version of language server {:?}. \
-                            error: {:?}, falling back to using {:?}",
-                            self.name(),
-                            error,
-                            prev_downloaded_binary.path
-                        );
-                        binary = Ok(prev_downloaded_binary);
-                    } else {
-                        delegate.update_status(
-                            self.name(),
-                            BinaryStatus::Failed {
-                                error: format!("{error:?}"),
-                            },
-                        );
-                    }
-                }
-
-                if let Ok(binary) = &binary {
-                    *cached_binary = Some((binary_options.pre_release, binary.clone()));
-                }
-
-                binary
-            }
-            .boxed_local();
-            (last_downloaded_binary, Some(download_binary))
+            (Err(anyhow!(
+                "Fred does not auto-download language servers. Please provide your own trusted copy of '{}'",
+                self.name().0
+            )), None)
         }
         .boxed_local()
     }
