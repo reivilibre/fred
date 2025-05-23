@@ -629,27 +629,7 @@ async fn upload_panic(
     panic: telemetry_events::Panic,
     most_recent_panic: &mut Option<(i64, String)>,
 ) -> Result<bool> {
-    *most_recent_panic = Some((panic.panicked_on, panic.payload.clone()));
-
-    let json_bytes = serde_json::to_vec(&PanicRequest { panic }).unwrap();
-
-    let Some(checksum) = client::telemetry::calculate_json_checksum(&json_bytes) else {
-        return Ok(false);
-    };
-
-    let Ok(request) = http_client::Request::builder()
-        .method(Method::POST)
-        .uri(panic_report_url.as_ref())
-        .header("x-zed-checksum", checksum)
-        .body(json_bytes.into())
-    else {
-        return Ok(false);
-    };
-
-    let response = http.send(request).await.context("error sending panic")?;
-    if !response.status().is_success() {
-        log::error!("Error uploading panic to server: {}", response.status());
-    }
+    log::warn!("Fred does not upload panic data.");
 
     Ok(true)
 }
@@ -662,69 +642,7 @@ async fn upload_previous_crashes(
     most_recent_panic: Option<(i64, String)>,
     installation_id: Option<String>,
 ) -> Result<()> {
-    let last_uploaded = KEY_VALUE_STORE
-        .read_kvp(LAST_CRASH_UPLOADED)?
-        .unwrap_or("zed-2024-01-17-221900.ips".to_string()); // don't upload old crash reports from before we had this.
-    let mut uploaded = last_uploaded.clone();
-
-    let crash_report_url = http.build_zed_api_url("/telemetry/crashes", &[])?;
-
-    // Crash directories are only set on macOS.
-    for dir in [crashes_dir(), crashes_retired_dir()]
-        .iter()
-        .filter_map(|d| d.as_deref())
-    {
-        let mut children = smol::fs::read_dir(&dir).await?;
-        while let Some(child) = children.next().await {
-            let child = child?;
-            let Some(filename) = child
-                .path()
-                .file_name()
-                .map(|f| f.to_string_lossy().to_lowercase())
-            else {
-                continue;
-            };
-
-            if !filename.starts_with("zed-") || !filename.ends_with(".ips") {
-                continue;
-            }
-
-            if filename <= last_uploaded {
-                continue;
-            }
-
-            let body = smol::fs::read_to_string(&child.path())
-                .await
-                .context("error reading crash file")?;
-
-            let mut request = http_client::Request::post(&crash_report_url.to_string())
-                .follow_redirects(http_client::RedirectPolicy::FollowAll)
-                .header("Content-Type", "text/plain");
-
-            if let Some((panicked_on, payload)) = most_recent_panic.as_ref() {
-                request = request
-                    .header("x-zed-panicked-on", format!("{panicked_on}"))
-                    .header("x-zed-panic", payload)
-            }
-            if let Some(installation_id) = installation_id.as_ref() {
-                request = request.header("x-zed-installation-id", installation_id);
-            }
-
-            let request = request.body(body.into())?;
-
-            let response = http.send(request).await.context("error sending crash")?;
-            if !response.status().is_success() {
-                log::error!("Error uploading crash to server: {}", response.status());
-            }
-
-            if uploaded < filename {
-                uploaded.clone_from(&filename);
-                KEY_VALUE_STORE
-                    .write_kvp(LAST_CRASH_UPLOADED.to_string(), filename)
-                    .await?;
-            }
-        }
-    }
+    log::warn!("Fred does not upload previous crash data.");
 
     Ok(())
 }
