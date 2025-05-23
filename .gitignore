@@ -37,3 +37,12 @@ xcuserdata/
 # Don't commit any secrets to the repo.
 .env
 .env.secret.toml
+# Devenv
+.devenv*
+devenv.local.nix
+
+# direnv
+.direnv
+
+# pre-commit
+.pre-commit-config.yaml
