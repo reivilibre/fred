@@ -1,3 +1,20 @@
+# Fred
+
+Fred is a soft-fork of the Zed editor, with the following privacy- and security-oriented changes:
+
+- remove auto-download of Language Servers
+    - please download them yourself and make them available on your PATH, then Fred will use them. This is the model that Helix uses and that I appreciate.
+- remove telemetry upload
+- remove crash log upload
+
+The removed features make me uncomfortable (especially downloading and executing external code), therefore Fred won't support them.
+
+I don't plan on (m)any other changes at this time.
+
+Updates will be ad-hoc in order to bring in new functionality and bug fixes from upstream, but likely not every single release.
+
+----- unmodified Zed readme beneath this line -----
+
 # Zed
 
 [![CI](https://github.com/zed-industries/zed/actions/workflows/ci.yml/badge.svg)](https://github.com/zed-industries/zed/actions/workflows/ci.yml)
