@@ -184,7 +184,11 @@ impl Telemetry {
         TelemetrySettings::register(cx);
 
         let state = Arc::new(Mutex::new(TelemetryState {
-            settings: *TelemetrySettings::get_global(cx),
+            // Fred always disables telemetry settings here
+            settings: TelemetrySettings {
+                diagnostics: false,
+                metrics: false,
+            },
             architecture: env::consts::ARCH,
             release_channel,
             system_id: None,
@@ -218,28 +222,6 @@ impl Telemetry {
             app_version: release_channel::AppVersion::global(cx).to_string(),
         }));
         Self::log_file_path();
-
-        cx.background_spawn({
-            let state = state.clone();
-            let os_version = os_version();
-            state.lock().os_version = Some(os_version.clone());
-            async move {
-                if let Some(tempfile) = File::create(Self::log_file_path()).log_err() {
-                    state.lock().log_file = Some(tempfile);
-                }
-            }
-        })
-        .detach();
-
-        cx.observe_global::<SettingsStore>({
-            let state = state.clone();
-
-            move |cx| {
-                let mut state = state.lock();
-                state.settings = *TelemetrySettings::get_global(cx);
-            }
-        })
-        .detach();
 
         let this = Arc::new(Self {
             clock,
@@ -310,10 +292,8 @@ impl Telemetry {
     }
 
     pub fn metrics_enabled(self: &Arc<Self>) -> bool {
-        let state = self.state.lock();
-        let enabled = state.settings.metrics;
-        drop(state);
-        enabled
+        // Fred does not enable metrics
+        false
     }
 
     pub fn set_authenticated_user_info(
@@ -421,47 +401,8 @@ impl Telemetry {
     }
 
     fn report_event(self: &Arc<Self>, event: Event) {
-        let mut state = self.state.lock();
-        // RUST_LOG=telemetry=trace to debug telemetry events
-        log::trace!(target: "telemetry", "{:?}", event);
-
-        if !state.settings.metrics {
-            return;
-        }
-
-        if state.flush_events_task.is_none() {
-            let this = self.clone();
-            let executor = self.executor.clone();
-            state.flush_events_task = Some(self.executor.spawn(async move {
-                executor.timer(FLUSH_INTERVAL).await;
-                this.flush_events().detach();
-            }));
-        }
-
-        let date_time = self.clock.utc_now();
-
-        let milliseconds_since_first_event = match state.first_event_date_time {
-            Some(first_event_date_time) => date_time
-                .saturating_duration_since(first_event_date_time)
-                .min(Duration::from_secs(60 * 60 * 24))
-                .as_millis() as i64,
-            None => {
-                state.first_event_date_time = Some(date_time);
-                0
-            }
-        };
-
-        let signed_in = state.metrics_id.is_some();
-        state.events_queue.push(EventWrapper {
-            signed_in,
-            milliseconds_since_first_event,
-            event,
-        });
-
-        if state.installation_id.is_some() && state.events_queue.len() >= state.max_queue_size {
-            drop(state);
-            self.flush_events().detach();
-        }
+        // Fred does not do telemetry
+        return;
     }
 
     pub fn metrics_id(self: &Arc<Self>) -> Option<Arc<str>> {
@@ -504,58 +445,10 @@ impl Telemetry {
     }
 
     pub fn flush_events(self: &Arc<Self>) -> Task<()> {
+        // Fred does not do telemetry
         let mut state = self.state.lock();
-        state.first_event_date_time = None;
-        let mut events = mem::take(&mut state.events_queue);
-        state.flush_events_task.take();
-        drop(state);
-        if events.is_empty() {
-            return Task::ready(());
-        }
-
-        let this = self.clone();
-        self.executor.spawn(
-            async move {
-                let mut json_bytes = Vec::new();
-
-                if let Some(file) = &mut this.state.lock().log_file {
-                    for event in &mut events {
-                        json_bytes.clear();
-                        serde_json::to_writer(&mut json_bytes, event)?;
-                        file.write_all(&json_bytes)?;
-                        file.write_all(b"\n")?;
-                    }
-                }
-
-                let request_body = {
-                    let state = this.state.lock();
-
-                    EventRequestBody {
-                        system_id: state.system_id.as_deref().map(Into::into),
-                        installation_id: state.installation_id.as_deref().map(Into::into),
-                        session_id: state.session_id.clone(),
-                        metrics_id: state.metrics_id.as_deref().map(Into::into),
-                        is_staff: state.is_staff,
-                        app_version: state.app_version.clone(),
-                        os_name: state.os_name.clone(),
-                        os_version: state.os_version.clone(),
-                        architecture: state.architecture.to_string(),
-
-                        release_channel: state.release_channel.map(Into::into),
-                        events,
-                    }
-                };
-
-                let request = this.build_request(json_bytes, request_body)?;
-                let response = this.http_client.send(request).await?;
-                if response.status() != 200 {
-                    log::error!("Failed to send events: HTTP {:?}", response.status());
-                }
-                anyhow::Ok(())
-            }
-            .log_err()
-            .map(|_| ()),
-        )
+        state.events_queue.clear();
+        return Task::ready(());
     }
 }
 
@@ -575,146 +468,4 @@ pub fn calculate_json_checksum(json: &impl AsRef<[u8]>) -> Option<String> {
     }
 
     Some(checksum)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clock::FakeSystemClock;
-    use gpui::TestAppContext;
-    use http_client::FakeHttpClient;
-    use telemetry_events::FlexibleEvent;
-
-    #[gpui::test]
-    fn test_telemetry_flush_on_max_queue_size(cx: &mut TestAppContext) {
-        init_test(cx);
-        let clock = Arc::new(FakeSystemClock::new());
-        let http = FakeHttpClient::with_200_response();
-        let system_id = Some("system_id".to_string());
-        let installation_id = Some("installation_id".to_string());
-        let session_id = "session_id".to_string();
-
-        cx.update(|cx| {
-            let telemetry = Telemetry::new(clock.clone(), http, cx);
-
-            telemetry.state.lock().max_queue_size = 4;
-            telemetry.start(system_id, installation_id, session_id, cx);
-
-            assert!(is_empty_state(&telemetry));
-
-            let first_date_time = clock.utc_now();
-            let event_properties = HashMap::from_iter([(
-                "test_key".to_string(),
-                serde_json::Value::String("test_value".to_string()),
-            )]);
-
-            let event = FlexibleEvent {
-                event_type: "test".to_string(),
-                event_properties,
-            };
-
-            telemetry.report_event(Event::Flexible(event.clone()));
-            assert_eq!(telemetry.state.lock().events_queue.len(), 1);
-            assert!(telemetry.state.lock().flush_events_task.is_some());
-            assert_eq!(
-                telemetry.state.lock().first_event_date_time,
-                Some(first_date_time)
-            );
-
-            clock.advance(Duration::from_millis(100));
-
-            telemetry.report_event(Event::Flexible(event.clone()));
-            assert_eq!(telemetry.state.lock().events_queue.len(), 2);
-            assert!(telemetry.state.lock().flush_events_task.is_some());
-            assert_eq!(
-                telemetry.state.lock().first_event_date_time,
-                Some(first_date_time)
-            );
-
-            clock.advance(Duration::from_millis(100));
-
-            telemetry.report_event(Event::Flexible(event.clone()));
-            assert_eq!(telemetry.state.lock().events_queue.len(), 3);
-            assert!(telemetry.state.lock().flush_events_task.is_some());
-            assert_eq!(
-                telemetry.state.lock().first_event_date_time,
-                Some(first_date_time)
-            );
-
-            clock.advance(Duration::from_millis(100));
-
-            // Adding a 4th event should cause a flush
-            telemetry.report_event(Event::Flexible(event));
-            assert!(is_empty_state(&telemetry));
-        });
-    }
-
-    #[gpui::test]
-    async fn test_telemetry_flush_on_flush_interval(
-        executor: BackgroundExecutor,
-        cx: &mut TestAppContext,
-    ) {
-        init_test(cx);
-        let clock = Arc::new(FakeSystemClock::new());
-        let http = FakeHttpClient::with_200_response();
-        let system_id = Some("system_id".to_string());
-        let installation_id = Some("installation_id".to_string());
-        let session_id = "session_id".to_string();
-
-        cx.update(|cx| {
-            let telemetry = Telemetry::new(clock.clone(), http, cx);
-            telemetry.state.lock().max_queue_size = 4;
-            telemetry.start(system_id, installation_id, session_id, cx);
-
-            assert!(is_empty_state(&telemetry));
-            let first_date_time = clock.utc_now();
-
-            let event_properties = HashMap::from_iter([(
-                "test_key".to_string(),
-                serde_json::Value::String("test_value".to_string()),
-            )]);
-
-            let event = FlexibleEvent {
-                event_type: "test".to_string(),
-                event_properties,
-            };
-
-            telemetry.report_event(Event::Flexible(event));
-            assert_eq!(telemetry.state.lock().events_queue.len(), 1);
-            assert!(telemetry.state.lock().flush_events_task.is_some());
-            assert_eq!(
-                telemetry.state.lock().first_event_date_time,
-                Some(first_date_time)
-            );
-
-            let duration = Duration::from_millis(1);
-
-            // Test 1 millisecond before the flush interval limit is met
-            executor.advance_clock(FLUSH_INTERVAL - duration);
-
-            assert!(!is_empty_state(&telemetry));
-
-            // Test the exact moment the flush interval limit is met
-            executor.advance_clock(duration);
-
-            assert!(is_empty_state(&telemetry));
-        });
-    }
-
-    // TODO:
-    // Test settings
-    // Update FakeHTTPClient to keep track of the number of requests and assert on it
-
-    fn init_test(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            let settings_store = SettingsStore::test(cx);
-            cx.set_global(settings_store);
-        });
-    }
-
-    fn is_empty_state(telemetry: &Telemetry) -> bool {
-        telemetry.state.lock().events_queue.is_empty()
-            && telemetry.state.lock().flush_events_task.is_none()
-            && telemetry.state.lock().first_event_date_time.is_none()
-    }
 }
